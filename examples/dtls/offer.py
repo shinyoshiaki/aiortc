@@ -1,4 +1,5 @@
-from aiortc import (RTCIceTransport, RTCIceGatherer, RTCCertificate, RTCDtlsTransport, RTCIceCandidate, RTCIceParameters)
+from aiortc import (RTCIceTransport, RTCIceGatherer, RTCCertificate, RTCDtlsTransport,
+                    RTCIceCandidate, RTCIceParameters, RTCDtlsFingerprint, RTCDtlsParameters)
 from aioice import (Candidate)
 import asyncio
 import websockets
@@ -51,18 +52,11 @@ async def main():
     gatherer = RTCIceGatherer()
     transport = RTCIceTransport(gatherer)
 
-    # asyncio.get_event_loop().run_until_complete()
+    print("websocket")
+
     await gatherer.gather()
 
     print("gather")
-
-    message = json.loads(await websocket.recv())
-
-    print("message %s" % {repr(message)})
-
-    candidates = [Candidate.from_sdp(c) for c in message["candidates"]]
-    for candidate in candidates:
-        transport.addRemoteCandidate(candidate_from_aioice(candidate))
 
     await websocket.send(
         json.dumps(
@@ -74,6 +68,13 @@ async def main():
         )
     )
 
+    message = json.loads(await websocket.recv())
+    print("message %s" % {repr(message)})
+
+    candidates = [Candidate.from_sdp(c) for c in message["candidates"]]
+    for candidate in candidates:
+        transport.addRemoteCandidate(candidate_from_aioice(candidate))
+
     params = RTCIceParameters(usernameFragment=message["username"],
                               password=message["password"])
     print("params %s" % {repr(params)})
@@ -81,17 +82,45 @@ async def main():
 
     print("connect")
 
+    await transport._send(b"hello")
+
+    message = json.loads(await websocket.recv())
+    print("message %s" % {repr(message)})
+
     certificate = RTCCertificate.generateCertificate()
     session = RTCDtlsTransport(transport, [certificate])
     receiver = DummyDataReceiver()
     session._register_data_receiver(receiver)
     params = session.getLocalParameters()
-    print("dtls params %s %s %s" % {params.fingerprints[0].algorithm, params.fingerprints[0].value, params.role})
 
-    data = await transport._recv()
-    print("message %s" % {repr(data)})
+    def gen(fingerprint: RTCDtlsFingerprint):
+        return "%s %s" % (fingerprint.algorithm, fingerprint.value)
+
+    print("dtls params %s" % {repr(params)})
+    await websocket.send(
+        json.dumps(
+            {
+                "fingerprints": [gen(v) for v in params.fingerprints],
+                "role": params.role
+            }
+        )
+    )
+
+    def gen(v: str):
+        return RTCDtlsFingerprint(algorithm=v.split()[0],
+                                  value=v.split()[1])
+
+    params = RTCDtlsParameters(fingerprints=[gen(v) for v in message["fingerprints"]],
+                               role=message["role"]
+                               )
+    print("params %s" % {repr(params)})
+    await session.start(params)
+    await asyncio.sleep(0.1)
+    print("dtls %s" % {repr(receiver.data)})
+
     await websocket.close()
 
-    # await session.start()
+    # certificate = RTCCertificate.generateCertificate()
+    # session = RTCDtlsTransport(transport, [certificate])
 
 asyncio.get_event_loop().run_until_complete(main())

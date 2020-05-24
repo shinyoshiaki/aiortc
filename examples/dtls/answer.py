@@ -1,4 +1,5 @@
-from aiortc import (RTCIceTransport, RTCIceGatherer, RTCCertificate, RTCDtlsTransport, RTCIceCandidate, RTCIceParameters)
+from aiortc import (RTCIceTransport, RTCIceGatherer, RTCCertificate, RTCDtlsTransport,
+                    RTCIceCandidate, RTCIceParameters, RTCDtlsFingerprint, RTCDtlsParameters)
 from aioice import (Candidate)
 import asyncio
 import websockets
@@ -57,7 +58,6 @@ async def main():
     print("gather")
 
     message = json.loads(await websocket.recv())
-
     print("message %s" % {repr(message)})
 
     candidates = [Candidate.from_sdp(c) for c in message["candidates"]]
@@ -80,18 +80,42 @@ async def main():
     await transport.start(params)
 
     print("connect")
+    data = await transport._recv()
+    print("message %s" % {repr(data)})
 
     certificate = RTCCertificate.generateCertificate()
     session = RTCDtlsTransport(transport, [certificate])
     receiver = DummyDataReceiver()
     session._register_data_receiver(receiver)
     params = session.getLocalParameters()
-    print("dtls params %s %s %s" % {params.fingerprints[0].algorithm, params.fingerprints[0].value, params.role})
 
-    data = await transport._recv()
-    print("message %s" % {repr(data)})
+    def gen(fingerprint: RTCDtlsFingerprint):
+        return "%s %s" % (fingerprint.algorithm, fingerprint.value)
+
+    print("dtls params %s" % {repr(params)})
+    await websocket.send(
+        json.dumps(
+            {
+                "fingerprints": [gen(v) for v in params.fingerprints],
+                "role": params.role
+            }
+        )
+    )
+    message = json.loads(await websocket.recv())
+    print("message %s" % {repr(message)})
+
+    def gen(v: str):
+        return RTCDtlsFingerprint(algorithm=v.split()[0],
+                                  value=v.split()[1])
+
+    params = RTCDtlsParameters(fingerprints=[gen(v) for v in message["fingerprints"]],
+                               role=message["role"]
+                               )
+    print("params %s" % {repr(params)})
+    await session.start(params)
+    await session._send_data(b"ping")
+
     await websocket.close()
 
-    # await session.start()
 
 asyncio.get_event_loop().run_until_complete(main())
